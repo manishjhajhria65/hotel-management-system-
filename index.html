@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StayHome Hotel Management System</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 system-ui,"Segoe UI",sans-serif;background:#f4f7fb;color:#14213d}
+header{background:#1d3b73;color:#fff;padding:14px 18px}header h1{margin:0;font-size:20px}header small{opacity:.8}
+nav{display:flex;gap:6px;flex-wrap:wrap;padding:10px 18px;background:#fff;border-bottom:1px solid #dbe3ef}
+nav button{border:1px solid #dbe3ef;background:#fff;padding:7px 12px;border-radius:8px;cursor:pointer;font:inherit}
+nav button.on{background:#2f80ed;color:#fff;border-color:#2f80ed}
+.wrap{max-width:1050px;margin:0 auto;padding:16px}
+.card{background:#fff;border:1px solid #dbe3ef;border-radius:12px;padding:14px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.stat div{color:#5b6b85;font-size:13px}.stat b{font-size:24px}
+.sc{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:560px}
+th,td{text-align:left;padding:8px;border-bottom:1px solid #dbe3ef;white-space:nowrap}
+th{color:#5b6b85;font-size:12px;text-transform:uppercase}
+input,select{padding:7px 9px;border:1px solid #dbe3ef;border-radius:8px;font:inherit;max-width:100%}
+label{display:block;font-size:13px;color:#5b6b85;margin-bottom:3px}
+.f{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;align-items:end}
+.btn{display:inline-block;background:#2f80ed;color:#fff;border:0;padding:8px 14px;border-radius:8px;cursor:pointer;font:inherit;text-decoration:none}
+.btn.sm{padding:4px 9px;font-size:13px}.btn.sec{background:#5b6b85}.btn.bad{background:#c0392b}
+.b{padding:2px 9px;border-radius:99px;background:#e6ecf5;font-size:12px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px}
+.tile{border-radius:10px;padding:10px;display:flex;flex-direction:column;border:1px solid #dbe3ef}
+.tile b{font-size:18px}.tile span{font-size:12px;color:#5b6b85}
+.tile.Available{background:#e6f6ec}.tile.Occupied{background:#fdecea}.tile.Maintenance{background:#e6ecf5}
+#msg.ok,#msg.err{padding:10px 12px;border-radius:8px;margin-bottom:12px}
+#msg.ok{background:#e6f6ec;color:#157f3b}#msg.err{background:#fdecea;color:#c0392b}
+pre{margin:0;overflow-x:auto;font:13px/1.5 Consolas,Menlo,monospace;white-space:pre-wrap}
+h2{margin:0 0 10px;font-size:17px}.note{color:#5b6b85;font-size:13px}
+@media print{header,nav,#msg,.noprint{display:none!important}#main>*:not(#invoice){display:none!important}#invoice{border:0}#invoice pre{font-size:15px}}
+</style></head><body>
+<header><h1>StayHome Hotel</h1><small>Website asks the Python program (app.py + hotel.py) to do the work</small></header>
+<nav>
+<button data-t="dash" onclick="go('dash')">Dashboard</button>
+<button data-t="rooms" onclick="go('rooms')">Rooms</button>
+<button data-t="cust" onclick="go('cust')">Customers</button>
+<button data-t="book" onclick="go('book')">Book a room</button>
+<button data-t="list" onclick="go('list')">Bookings</button>
+<button data-t="data" onclick="go('data')">Export CSV</button>
+<button data-t="learn" onclick="go('learn')">How it works</button>
+</nav>
+<div class="wrap">
+<div id="msg" class="noprint"></div>
+<div id="main"><div class="card">Loading from the Python server...</div></div>
+<div class="card noprint"><h2>Live: what the page just asked Python</h2><pre id="last">(do something and the request appears here)</pre></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const N = x => Math.trunc(Number(x)) || 0;           // text from a box -> whole number
+let D = null, tab = "dash", msg = null, inv = "", invId = 0, last = "";
+
+/* ---------- talking to the Python server ---------- */
+async function load() {                               // GET all data from Python
+  D = await (await fetch("/api/data")).json();
+  if (invId) await getInv(invId);
+  render();
+}
+async function call(action, ...args) {               // ask Python to run one action
+  try {
+    const res = await fetch("/api/" + action, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(args)});
+    const j = await res.json();
+    last = "Page asked Python:  POST /api/" + action + "  " + JSON.stringify(args) + "\nPython answered:  " + JSON.stringify(j);
+    msg = [j.ok, j.message];
+    if (j.ok) await load(); else show();
+  } catch (e) {
+    msg = [false, "Cannot reach the Python server. Is app.py still running?"]; show();
+  }
+}
+async function getInv(id) { invId = id; const j = await (await fetch("/api/invoice/" + id)).json(); inv = j.ok ? j.message : ""; }
+async function showInv(id) { await getInv(id); render(); }
+function closeInv() { inv = ""; invId = 0; render(); }
+
+/* ---------- small helpers ---------- */
+const tbl = (h, rows) => '<div class="sc"><table><tr>' + h.map(x => "<th>" + x + "</th>").join("") + "</tr>" + rows.join("") + "</table></div>";
+function pickCust(t) {                                // customer typed as ID or name letters -> id
+  t = t.trim(); if (!t) return 0;
+  const m = t.match(/^(\d+)(\s*-.*)?$/);
+  if (m) return D.customers.some(c => c.id === +m[1]) ? +m[1] : 0;
+  const L = D.customers.filter(c => c.name.toLowerCase().includes(t.toLowerCase()));
+  return L.length === 1 ? L[0].id : 0;
+}
+function chint() { const id = pickCust($("bc").value); $("bch").textContent = id ? "Selected: " + D.customers.find(c => c.id === id).name : ""; }
+function doBook() {
+  const id = pickCust($("bc").value);
+  if (!id) { msg = [false, "Type part of the customer name or the ID, then pick one customer."]; return show(); }
+  call("book_room", id, N($("br").value), $("bi").value, $("bo").value, N($("bg").value), N($("bd").value), N($("ba").value));
+}
+function pv(id) {                                     // live "balance after payment" note
+  const b = D.bookings.find(x => x.id === id), a = N($("pay" + id).value), bal = b.total - b.paid;
+  $("pv" + id).textContent = !a ? "" : a > bal ? "More than the balance" : "Balance after: Rs " + (bal - a);
+}
+
+/* ---------- screens ---------- */
+const V = {
+dash() {
+  const stats = Object.entries(D.summary).map(([k, v]) => `<div class="card stat"><div>${esc(k)}</div><b>${esc(v)}</b></div>`).join("");
+  const tiles = D.rooms.map(r => `<div class="tile ${r.status}"><b>${esc(r.number)}</b><span>${esc(r.type)}</span><span>${r.status}</span></div>`).join("");
+  return `<div class="grid">${stats}</div><div class="card"><h2>Room board</h2><div class="tiles">${tiles}</div></div>
+  <button class="btn sec" onclick="call('reset')">Reset demo data</button>`;
+},
+rooms() {
+  const rows = D.rooms.map(r => {
+    const next = r.status === "Maintenance" ? "Available" : "Maintenance";
+    return `<tr><td>${r.id}</td><td>${esc(r.number)}</td><td>${esc(r.type)}</td><td>Rs ${r.price}</td><td>${r.capacity}</td><td><span class="b">${r.status}</span></td>
+    <td><button class="btn sm" onclick="call('set_room_status',${r.id},'${next}')">Set ${next}</button> <button class="btn sm bad" onclick="call('delete_room',${r.id})">Delete</button></td></tr>`;
+  });
+  return `<div class="card"><h2>Rooms</h2>${tbl(["ID","Room","Type","Price","Guests","Status","Actions"], rows)}</div>
+  <div class="card"><h2>Add room</h2><div class="f">
+  <div><label>Room number</label><input id="rn"></div>
+  <div><label>Type</label><select id="rt">${D.types.map(t => `<option>${esc(t)}</option>`).join("")}</select></div>
+  <div><label>Price per night (Rs)</label><input id="rp" type="number"></div>
+  <div><label>Capacity</label><input id="rc" type="number" value="2"></div>
+  <button class="btn" onclick="call('add_room',$('rn').value,$('rt').value,N($('rp').value),N($('rc').value))">Add room</button></div>
+  <div class="f" style="margin-top:14px"><div><label>Create a new room type</label><input id="nt" placeholder="e.g. Family"></div>
+  <button class="btn sec" onclick="call('add_room_type',$('nt').value)">Add type</button></div></div>`;
+},
+cust() {
+  const rows = D.customers.map(c => `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.email)}</td><td>${esc(c.phone)}</td>
+    <td>${D.bookings.filter(b => b.customer_id === c.id).length}</td><td><button class="btn sm bad" onclick="call('delete_customer',${c.id})">Delete</button></td></tr>`);
+  return `<div class="card"><h2>Customers</h2>${tbl(["ID","Name","Email","Phone","Stays","Actions"], rows)}</div>
+  <div class="card"><h2>Add customer</h2><div class="f">
+  <div><label>Full name</label><input id="cn"></div><div><label>Email</label><input id="ce"></div><div><label>Phone</label><input id="cp"></div>
+  <button class="btn" onclick="call('add_customer',$('cn').value,$('ce').value,$('cp').value)">Register</button></div></div>`;
+},
+book() {
+  const rooms = D.rooms.filter(r => r.status !== "Maintenance");
+  return `<div class="card"><h2>Book a room</h2><div class="f">
+  <div><label>Customer (type name letters or ID)</label><input id="bc" list="cl" autocomplete="off" oninput="chint()">
+    <datalist id="cl">${D.customers.map(c => `<option value="${esc(c.id + " - " + c.name)}"></option>`).join("")}</datalist><div id="bch" class="note"></div></div>
+  <div><label>Room</label><select id="br">${rooms.map(r => `<option value="${r.id}">${esc(r.number + " " + r.type + " (Rs " + r.price + ", max " + r.capacity + ")")}</option>`).join("")}</select></div>
+  <div><label>Check-in</label><input id="bi" type="date"></div><div><label>Check-out</label><input id="bo" type="date"></div>
+  <div><label>Guests</label><input id="bg" type="number" value="2"></div>
+  <div><label>Discount (Rs)</label><input id="bd" type="number" value="0"></div>
+  <div><label>Advance paid (Rs)</label><input id="ba" type="number" value="0"></div>
+  <button class="btn" onclick="doBook()">Confirm booking</button></div>
+  <p class="note">Python checks the dates, capacity, double booking and calculates the bill.</p></div>`;
+},
+list() {
+  const rows = D.bookings.slice().reverse().map(b => {
+    const c = D.customers.find(x => x.id === b.customer_id), r = D.rooms.find(x => x.id === b.room_id), bal = b.total - b.paid;
+    let a = "";
+    if (b.status === "Confirmed") a += `<button class="btn sm" onclick="call('check_in_guest',${b.id})">Check-in</button> <button class="btn sm bad" onclick="call('cancel_booking',${b.id})">Cancel</button> `;
+    if ((b.status === "Confirmed" || b.status === "Checked-In") && bal > 0)
+      a += `<input id="pay${b.id}" type="number" placeholder="Rs" style="width:80px" oninput="pv(${b.id})"> <button class="btn sm" onclick="call('take_payment',${b.id},N($('pay${b.id}').value))">Pay</button> <button class="btn sm sec" onclick="$('pay${b.id}').value=${bal};pv(${b.id})">Full</button> <span id="pv${b.id}" class="note"></span> `;
+    if (b.status === "Checked-In") a += `<button class="btn sm" onclick="call('check_out_guest',${b.id})">Check-out</button> `;
+    a += `<button class="btn sm sec" onclick="showInv(${b.id})">Invoice</button>`;
+    return `<tr><td>${b.code}</td><td>${esc(c.name)}</td><td>${esc(r.number)}</td><td>${b.check_in} to ${b.check_out}</td><td><span class="b">${b.status}</span></td>
+      <td>Rs ${b.total}</td><td>Rs ${b.paid}</td><td><b>Rs ${bal}</b></td><td>${a}</td></tr>`;
+  });
+  const invoice = inv ? `<div class="card" id="invoice"><pre>${esc(inv)}</pre><p class="noprint"><button class="btn" onclick="window.print()">Print / Save as PDF</button> <button class="btn sec" onclick="closeInv()">Close</button></p></div>` : "";
+  return `<div class="card"><h2>Bookings</h2>${rows.length ? tbl(["Code","Guest","Room","Dates","Status","Total","Paid","Balance","Actions"], rows) : "<p>No bookings yet. Use Book a room.</p>"}</div>${invoice}`;
+},
+data() {
+  return `<div class="card"><h2>Export to CSV</h2><p class="note">Python writes the .csv file and your browser downloads it.</p>
+  <p>${["rooms","customers","bookings"].map(k => `<a class="btn" href="/api/export/${k}">Download ${k}.csv</a>`).join(" ")}</p></div>`;
+},
+learn() {
+  return `<div class="card"><h2>How the website asks Python to run</h2><ol>
+  <li>You click a button in the page (HTML + JavaScript).</li>
+  <li>JavaScript sends a request to the Python server, for example <code>POST /api/book_room</code>.</li>
+  <li><b>app.py</b> receives it and calls the matching function in <b>hotel.py</b>.</li>
+  <li>The function checks the rules (dates, capacity, double booking, payment) and returns (ok, message).</li>
+  <li>If ok, Python saves the data to <b>hotel_data.json</b>.</li>
+  <li>The page shows the message and loads the new data from Python.</li></ol>
+  <p class="note">Watch the black terminal window: every request prints a line there. The box at the bottom of this page shows the same request and answer.</p></div>`;
+}};
+
+/* ---------- plumbing ---------- */
+function show() {
+  const m = $("msg"); m.className = msg ? (msg[0] ? "ok" : "err") : "";
+  m.textContent = msg ? (msg[0] ? "OK: " : "ERROR: ") + msg[1] : "";
+  $("last").textContent = last || "(do something and the request appears here)";
+}
+function render() {
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
+  $("main").innerHTML = V[tab](); show();
+}
+function go(t) { tab = t; msg = null; inv = ""; invId = 0; render(); }
+load().catch(() => { $("main").innerHTML = '<div class="card">Cannot reach the Python server. Start it with: python app.py</div>'; });
+</script></body></html>
